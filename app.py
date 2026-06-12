@@ -1,33 +1,17 @@
-import os
+"""MediBot — Streamlit UI.
+
+This file contains only presentation logic.
+All ML / RAG work is delegated to pipeline.py.
+"""
 import csv
-from datetime import datetime
+import os
 
 import streamlit as st
-from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint, ChatHuggingFace
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
-from langchain_core.messages import HumanMessage, SystemMessage
-from sentence_transformers import CrossEncoder
 
-from config import REPO_ID, EMBED_MODEL, RERANK_MODEL, DB_PATH, FETCH_K, TOP_K, TEMPERATURE, MAX_TOKENS
-from ingest import build_vectorstore
+from config import REPO_ID
+from pipeline import load_resources, log_feedback, retrieve_docs, stream_response
 
-load_dotenv()
-
-def _token():
-    try:
-        return st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN", "")
-    except Exception:
-        return os.environ.get("HF_TOKEN", "")
-
-SYSTEM = (
-    "You are MediBot, a medical Q&A assistant. Answer ONLY from the context below. "
-    "If the answer is not in the context, say 'I don't have that information in my knowledge base.'\n\n"
-    "Context:\n{context}"
-)
-
+# ── Page config & CSS ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="MediBot", page_icon="🩺", layout="wide")
 st.markdown("""
 <style>
@@ -40,68 +24,29 @@ html, body, [data-testid="stAppViewContainer"] { background:#0d1117; color:#c9d1
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
     background:#1a2233; border-color:#2a3a55;
 }
-[data-testid="stChatMessage"] p { margin:0.4em 0; line-height:1.65; }
-[data-testid="stChatMessage"] h2,[data-testid="stChatMessage"] h3 { color:#79c0ff; }
-[data-testid="stChatMessage"] code { background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:1px 6px; color:#d2a8ff; }
-.source-card { background:#1e293b; border-left:3px solid #3b82f6; border-radius:6px; padding:10px 14px; margin-bottom:8px; font-size:0.82rem; color:#cbd5e1; }
+[data-testid="stChatMessage"] p  { margin:0.4em 0; line-height:1.65; }
+[data-testid="stChatMessage"] h2,
+[data-testid="stChatMessage"] h3 { color:#79c0ff; }
+[data-testid="stChatMessage"] code {
+    background:#0d1117; border:1px solid #30363d;
+    border-radius:4px; padding:1px 6px; color:#d2a8ff;
+}
+.source-card {
+    background:#1e293b; border-left:3px solid #3b82f6; border-radius:6px;
+    padding:10px 14px; margin-bottom:8px; font-size:0.82rem; color:#cbd5e1;
+}
 .source-meta { font-size:0.72rem; color:#64748b; margin-top:5px; }
 .block-container { padding-top:1.5rem; }
-[data-testid="stChatInput"] { background:#161b22 !important; border:1px solid #30363d !important; border-radius:10px !important; }
+[data-testid="stChatInput"] {
+    background:#161b22 !important; border:1px solid #30363d !important; border-radius:10px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource(show_spinner="Loading knowledge base and models — first run takes ~60 s…")
-def load_resources():
-    if not os.path.exists(f"{DB_PATH}/index.faiss"):
-        build_vectorstore()
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-    emb = HuggingFaceEmbeddings(model_name=EMBED_MODEL, model_kwargs={"device": "cpu"})
-    db  = FAISS.load_local(DB_PATH, emb, allow_dangerous_deserialization=True)
-
-    all_docs   = list(db.docstore._dict.values())
-    bm25       = BM25Retriever.from_documents(all_docs); bm25.k = FETCH_K
-    faiss_ret  = db.as_retriever(search_kwargs={"k": FETCH_K})
-    retriever  = EnsembleRetriever(retrievers=[bm25, faiss_ret], weights=[0.4, 0.6])
-
-    reranker = CrossEncoder(RERANK_MODEL)
-
-    endpoint = HuggingFaceEndpoint(
-        repo_id=REPO_ID, temperature=TEMPERATURE, max_new_tokens=MAX_TOKENS,
-        huggingfacehub_api_token=_token(), streaming=True, task="text-generation",
-    )
-    llm = ChatHuggingFace(llm=endpoint)
-    return retriever, reranker, llm
-
-
-def retrieve(query, retriever, reranker):
-    docs   = retriever.invoke(query)
-    pairs  = [[query, d.page_content] for d in docs]
-    scores = reranker.predict(pairs)
-    return [d for _, d in sorted(zip(scores, docs), reverse=True)][:TOP_K]
-
-
-def stream_response(query, history, docs, llm):
-    context  = "\n\n---\n\n".join(d.page_content for d in docs)
-    hist_str = "\n".join(f"Human: {q}\nAssistant: {a}" for q, a in history[-3:])
-    system   = SYSTEM.format(context=context)
-    if hist_str:
-        system += f"\n\nConversation so far:\n{hist_str}"
-    msgs = [SystemMessage(content=system), HumanMessage(content=query)]
-    try:
-        for chunk in llm.stream(msgs):
-            if chunk.content:
-                yield chunk.content
-    except Exception:
-        yield llm.invoke(msgs).content
-
-
-def log_feedback(question, answer, rating):
-    with open("feedback.csv", "a", newline="") as f:
-        csv.writer(f).writerow([datetime.now().isoformat(), question, answer[:300], rating])
-
-
-def render_sources(sources):
+def render_sources(sources: list) -> None:
     for src in sources:
         meta  = src["metadata"]
         page  = meta.get("page_label", meta.get("page", "?"))
@@ -113,7 +58,21 @@ def render_sources(sources):
         )
 
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
+def render_feedback_buttons(i: int, msg: dict) -> None:
+    prev_content = st.session_state.messages[i - 1]["content"] if i > 0 else ""
+    c1, c2, _ = st.columns([1, 1, 20])
+    if c1.button("👍", key=f"up_{i}"):
+        st.session_state.messages[i]["feedback"] = "positive"
+        log_feedback(prev_content, msg["content"], "positive")
+        st.rerun()
+    if c2.button("👎", key=f"dn_{i}"):
+        st.session_state.messages[i]["feedback"] = "negative"
+        log_feedback(prev_content, msg["content"], "negative")
+        st.rerun()
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/caduceus.png", width=60)
     st.title("MediBot")
@@ -123,10 +82,12 @@ with st.sidebar:
     st.markdown(f"**Model**  \n`{REPO_ID}`")
     st.markdown("**Retrieval**  \nHybrid BM25 + FAISS + Cross-Encoder Reranking")
     st.divider()
+
     if st.button("Clear chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.history  = []
         st.rerun()
+
     if os.path.exists("feedback.csv"):
         with open("feedback.csv") as f:
             rows = list(csv.reader(f))
@@ -134,49 +95,51 @@ with st.sidebar:
         neg = sum(1 for r in rows if r and r[-1] == "negative")
         if rows:
             st.caption(f"Feedback — 👍 {pos}  👎 {neg}")
+
     st.divider()
     st.caption("Not a substitute for professional medical advice.")
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-st.title("🩺 MediBot")
-st.caption("Ask anything from the Gale Encyclopedia of Medicine. Sources are shown with every answer.")
+# ── Session state defaults ────────────────────────────────────────────────────
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = []     # list of (question, answer) tuples
+
+
+# ── Load ML resources (cached) ────────────────────────────────────────────────
 
 retriever, reranker, llm = load_resources()
 
+
+# ── Main panel ────────────────────────────────────────────────────────────────
+
+st.title("🩺 MediBot")
+st.caption("Ask anything from the Gale Encyclopedia of Medicine. Every answer includes page-level citations.")
+
+# Render existing conversation
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="🩺" if msg["role"] == "assistant" else "🙋"):
         st.markdown(msg["content"])
+
         if msg["role"] == "assistant":
             if msg.get("sources"):
                 with st.expander(f"📄 {len(msg['sources'])} source(s)"):
                     render_sources(msg["sources"])
+
             if msg.get("feedback") is None:
-                c1, c2, _ = st.columns([1, 1, 20])
-                if c1.button("👍", key=f"up_{i}"):
-                    st.session_state.messages[i]["feedback"] = "positive"
-                    prev = st.session_state.messages[i - 1]["content"] if i > 0 else ""
-                    log_feedback(prev, msg["content"], "positive")
-                    st.rerun()
-                if c2.button("👎", key=f"dn_{i}"):
-                    st.session_state.messages[i]["feedback"] = "negative"
-                    prev = st.session_state.messages[i - 1]["content"] if i > 0 else ""
-                    log_feedback(prev, msg["content"], "negative")
-                    st.rerun()
+                render_feedback_buttons(i, msg)
             else:
                 st.caption(f"Feedback: {msg['feedback']}")
 
+# Handle new user message
 if user_input := st.chat_input("Ask a medical question…"):
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user", avatar="🙋"):
         st.markdown(user_input)
 
-    docs = retrieve(user_input, retriever, reranker)
+    docs = retrieve_docs(user_input, retriever, reranker)
 
     with st.chat_message("assistant", avatar="🩺"):
         response = st.write_stream(stream_response(user_input, st.session_state.history, docs, llm))
@@ -185,7 +148,9 @@ if user_input := st.chat_input("Ask a medical question…"):
             render_sources(sources)
 
     st.session_state.messages.append({
-        "role": "assistant", "content": response,
-        "sources": sources, "feedback": None,
+        "role": "assistant",
+        "content": response,
+        "sources": sources,
+        "feedback": None,
     })
     st.session_state.history.append((user_input, response))
