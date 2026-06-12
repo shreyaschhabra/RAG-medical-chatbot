@@ -211,15 +211,3 @@ Results are printed to console and saved to `eval_results.json`.
 MediBot is a research and educational tool. It is not a substitute for professional medical advice, diagnosis, or treatment.
 
 ---
-
-## Resume Metrics Snapshot
-
-```
-Knowledge base  : Gale Encyclopedia of Medicine (2nd ed.), 4,109 indexed chunks
-Embedding model : BAAI/bge-base-en-v1.5 (768-dim, retrieval-optimised, CPU)
-Retrieval       : Hybrid BM25 + FAISS EnsembleRetriever, FETCH_K=15 candidates
-Reranking       : Cross-Encoder ms-marco-MiniLM-L-6-v2, top-5 selection
-Evaluation      : 50 ground-truth QA pairs — Hit Rate 100%, MRR 1.00, Context Recall 0.57
-Latency         : P50 335 ms, P95 1.24 s (retrieval + reranking, CPU)
-Deployment      : Streamlit Community Cloud + Docker
-```
