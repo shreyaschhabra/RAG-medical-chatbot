@@ -1,4 +1,4 @@
-# MediBot — RAG Medical Chatbot
+# MyMedic — RAG Medical Chatbot
 
 An end-to-end Retrieval-Augmented Generation (RAG) chatbot that answers medical questions by grounding every response in the *Gale Encyclopedia of Medicine (2nd Edition)*. Answers never go beyond the source material; every response includes expandable page-level citations.
 
