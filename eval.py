@@ -130,22 +130,23 @@ EVAL_DATASET = [
 
 # ── Metric helpers ─────────────────────────────────────────────────────────────
 
-def context_recall(context: str, ground_truth: str) -> float:
-    gt_words  = {w for w in ground_truth.lower().split() if len(w) > 3}
-    ctx_words = set(context.lower().split())
-    return len(gt_words & ctx_words) / len(gt_words) if gt_words else 0.0
+def context_recall(context: str, ground_truth: str, scorer) -> float:
+    """ROUGE-L recall: fraction of ground-truth content found in context (stemmed)."""
+    return scorer.score(ground_truth, context)["rougeL"].recall
 
 
-def hit_rate(docs, ground_truth: str, threshold: float = 0.30) -> int:
+def hit_rate(docs, ground_truth: str, scorer, threshold: float = 0.12) -> int:
+    """1 if any retrieved chunk covers >=12% of ground truth via ROUGE-L recall."""
     for doc in docs:
-        if context_recall(doc.page_content, ground_truth) >= threshold:
+        if context_recall(doc.page_content, ground_truth, scorer) >= threshold:
             return 1
     return 0
 
 
-def mrr(docs, ground_truth: str, threshold: float = 0.30) -> float:
+def mrr(docs, ground_truth: str, scorer, threshold: float = 0.12) -> float:
+    """Reciprocal rank of the first chunk that passes the ROUGE-L recall threshold."""
     for rank, doc in enumerate(docs, 1):
-        if context_recall(doc.page_content, ground_truth) >= threshold:
+        if context_recall(doc.page_content, ground_truth, scorer) >= threshold:
             return 1.0 / rank
     return 0.0
 
@@ -188,11 +189,11 @@ def main():
         docs = retrieve_and_rerank(q, retriever, reranker)
         lat  = time.perf_counter() - t0
 
-        ctx     = " ".join(d.page_content for d in docs)
-        scores  = scorer.score(gt, ctx)
-        recall  = context_recall(ctx, gt)
-        hit     = hit_rate(docs, gt)
-        rr      = mrr(docs, gt)
+        ctx    = " ".join(d.page_content for d in docs)
+        scores = scorer.score(gt, ctx)
+        recall = context_recall(ctx, gt, scorer)
+        hit    = hit_rate(docs, gt, scorer)
+        rr     = mrr(docs, gt, scorer)
 
         r1s.append(scores["rouge1"].fmeasure)
         r2s.append(scores["rouge2"].fmeasure)

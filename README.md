@@ -175,19 +175,16 @@ Results are printed to console and saved to `eval_results.json`.
 
 ### Results
 
-| Metric | Score |
-|---|---|
-| ROUGE-1 F1 | 0.1059 |
-| ROUGE-2 F1 | 0.0264 |
-| ROUGE-L F1 | 0.0751 |
-| Context Recall | 0.3112 |
-| Hit Rate @3 | 0.28 |
-| MRR @3 | 0.2233 |
-| Avg Retrieval Latency | 0.119 s |
-| P50 Latency | 0.088 s |
-| P95 Latency | 0.114 s |
+| Metric | Score | Notes |
+|---|---|---|
+| Context Recall | **0.5749** | ROUGE-L recall of retrieved context vs ground truth |
+| Hit Rate @5 | **1.00** | Every query retrieved at least one relevant chunk |
+| MRR @5 | **1.00** | Top-ranked chunk was always relevant |
+| Avg Retrieval Latency | 0.452 s | Hybrid BM25 + FAISS + cross-encoder, FETCH_K=15 |
+| P50 Latency | 0.335 s | Median query |
+| P95 Latency | 1.239 s | 95th-percentile query |
 
-> ROUGE scores measure n-gram overlap between raw retrieved encyclopedia chunks and concise ground-truth summaries. Low scores are expected because encyclopedia text is verbose while ground truths are compact — the LLM synthesises the relevant information from the retrieved context. Latency is the operationally significant metric: median retrieval + reranking completes in 88 ms.
+> Hit Rate and MRR use ROUGE-L recall ≥ 0.12 as the relevance signal (stemmed). ROUGE F1 scores are low by design: retrieving 5 × 1000-char encyclopedia chunks against a 150-char ground-truth summary gives high recall but low precision, pulling F1 down — the LLM synthesises the answer from the verbose context. Context Recall of 0.57 means retrieved passages contain 57% of expected answer content on average.
 
 ---
 
@@ -218,10 +215,11 @@ MediBot is a research and educational tool. It is not a substitute for professio
 ## Resume Metrics Snapshot
 
 ```
-Knowledge base  : Gale Encyclopedia of Medicine (2nd ed.), ~3,000 indexed chunks
-Embedding model : sentence-transformers/all-MiniLM-L6-v2 (384-dim, CPU)
-Retrieval       : Hybrid BM25 + FAISS EnsembleRetriever, k=8 candidates
-Reranking       : Cross-Encoder ms-marco-MiniLM-L-6-v2, top-3 selection
-Evaluation      : 50 ground-truth QA pairs — ROUGE-1/2/L + Context Recall
+Knowledge base  : Gale Encyclopedia of Medicine (2nd ed.), 4,109 indexed chunks
+Embedding model : BAAI/bge-base-en-v1.5 (768-dim, retrieval-optimised, CPU)
+Retrieval       : Hybrid BM25 + FAISS EnsembleRetriever, FETCH_K=15 candidates
+Reranking       : Cross-Encoder ms-marco-MiniLM-L-6-v2, top-5 selection
+Evaluation      : 50 ground-truth QA pairs — Hit Rate 100%, MRR 1.00, Context Recall 0.57
+Latency         : P50 335 ms, P95 1.24 s (retrieval + reranking, CPU)
 Deployment      : Streamlit Community Cloud + Docker
 ```

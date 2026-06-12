@@ -44,7 +44,11 @@ def load_resources():
     if not os.path.exists(f"{DB_PATH}/index.faiss"):
         build_vectorstore()
 
-    emb = HuggingFaceEmbeddings(model_name=EMBED_MODEL, model_kwargs={"device": "cpu"})
+    emb = HuggingFaceEmbeddings(
+        model_name=EMBED_MODEL,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
     db  = FAISS.load_local(DB_PATH, emb, allow_dangerous_deserialization=True)
 
     all_docs  = list(db.docstore._dict.values())

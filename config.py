@@ -1,11 +1,11 @@
 REPO_ID       = "Qwen/Qwen2.5-7B-Instruct"
-EMBED_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MODEL   = "BAAI/bge-base-en-v1.5"       # retrieval-optimised; much stronger than MiniLM
 RERANK_MODEL  = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 DB_PATH       = "vectorstore/db_faiss"
 DATA_PATH     = "data/"
-CHUNK_SIZE    = 500
-CHUNK_OVERLAP = 50
-FETCH_K       = 8
-TOP_K         = 3
+CHUNK_SIZE    = 1000                            # was 500 — preserves full medical sentences
+CHUNK_OVERLAP = 200                             # was 50  — avoids context cut-off at boundaries
+FETCH_K       = 15                              # was 8   — more candidates before reranking
+TOP_K         = 5                              # was 3   — more context for the LLM
 TEMPERATURE   = 0.4
 MAX_TOKENS    = 512

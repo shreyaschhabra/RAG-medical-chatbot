@@ -12,7 +12,11 @@ def build_vectorstore():
     chunks = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     ).split_documents(docs)
-    emb = HuggingFaceEmbeddings(model_name=EMBED_MODEL, model_kwargs={"device": "cpu"})
+    emb = HuggingFaceEmbeddings(
+        model_name=EMBED_MODEL,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
     db = FAISS.from_documents(chunks, emb)
     db.save_local(DB_PATH)
     print(f"Built vectorstore: {len(chunks)} chunks -> {DB_PATH}")
