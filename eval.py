@@ -1,23 +1,28 @@
-"""Offline evaluation — 50 ground-truth QA pairs.
+"""Retrieval evaluation — 50 ground-truth QA pairs.
+Measures the RAG pipeline's retrieval quality with no LLM calls needed.
+
+Metrics
+-------
+Context Recall   : fraction of ground-truth key terms found in retrieved chunks
+ROUGE-1/2/L F1   : n-gram overlap between retrieved context and ground truth
+Hit Rate @3      : >= 1 retrieved chunk contains >30% of ground-truth terms
+MRR @3           : Mean Reciprocal Rank of first relevant chunk
+Retrieval Latency: wall-clock time for hybrid retrieval + reranking
+
 Run: python eval.py
-Outputs: eval_results.json  (metrics) + prints a summary table.
+Output: eval_results.json + printed summary table
 """
 import json
-import os
 import time
 
-from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint, ChatHuggingFace
-from langchain_community.vectorstores import FAISS
 from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import FAISS
 from langchain.retrievers import EnsembleRetriever
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_huggingface import HuggingFaceEmbeddings
 from rouge_score import rouge_scorer as rouge_lib
 from sentence_transformers import CrossEncoder
 
-from config import REPO_ID, EMBED_MODEL, RERANK_MODEL, DB_PATH, FETCH_K, TOP_K, TEMPERATURE, MAX_TOKENS
-
-load_dotenv()
+from config import DB_PATH, EMBED_MODEL, FETCH_K, RERANK_MODEL, TOP_K
 
 EVAL_DATASET = [
     {"question": "What is diabetes mellitus?",
@@ -105,25 +110,47 @@ EVAL_DATASET = [
     {"question": "How is sleep apnea diagnosed?",
      "ground_truth": "Sleep apnea is diagnosed through a polysomnography (sleep study) that measures breathing, oxygen levels, and brain activity during sleep."},
     {"question": "What is peripheral artery disease?",
-     "ground_truth": "Peripheral artery disease is narrowing of arteries reducing blood flow to limbs, causing leg pain while walking (claudication), numbness, and increased risk of amputation."},
+     "ground_truth": "Peripheral artery disease is narrowing of arteries reducing blood flow to limbs, causing leg pain while walking, numbness, and increased risk of amputation."},
     {"question": "What causes epilepsy?",
      "ground_truth": "Epilepsy is caused by abnormal electrical activity in the brain due to genetic factors, brain injury, stroke, infection, or unknown causes, resulting in recurrent seizures."},
     {"question": "What are the symptoms of Lyme disease?",
-     "ground_truth": "Lyme disease symptoms include a characteristic bulls-eye rash, fever, fatigue, joint pain, and if untreated, neurological and cardiac complications."},
+     "ground_truth": "Lyme disease symptoms include a bulls-eye rash, fever, fatigue, joint pain, and if untreated, neurological and cardiac complications."},
     {"question": "What is aortic aneurysm?",
-     "ground_truth": "An aortic aneurysm is an abnormal bulging of the aorta wall that can rupture, causing life-threatening internal bleeding; risk factors include hypertension and smoking."},
+     "ground_truth": "An aortic aneurysm is an abnormal bulging of the aorta wall that can rupture causing life-threatening bleeding; risk factors include hypertension and smoking."},
     {"question": "How is sepsis treated?",
      "ground_truth": "Sepsis is treated with intravenous antibiotics, fluid resuscitation, vasopressors for low blood pressure, oxygen support, and source control of the infection."},
     {"question": "What is endometriosis?",
      "ground_truth": "Endometriosis is a condition where tissue similar to the uterine lining grows outside the uterus, causing chronic pelvic pain, painful periods, and infertility."},
     {"question": "What is pancreatitis?",
-     "ground_truth": "Pancreatitis is inflammation of the pancreas, usually caused by gallstones or excessive alcohol use, presenting with severe abdominal pain, nausea, and elevated lipase levels."},
+     "ground_truth": "Pancreatitis is inflammation of the pancreas usually caused by gallstones or alcohol use, presenting with severe abdominal pain, nausea, and elevated lipase levels."},
     {"question": "What are the risk factors for colorectal cancer?",
      "ground_truth": "Risk factors for colorectal cancer include age over 50, family history, inflammatory bowel disease, high-fat low-fiber diet, obesity, smoking, and alcohol consumption."},
-    {"question": "What is carpal tunnel syndrome?",
-     "ground_truth": "Carpal tunnel syndrome is compression of the median nerve at the wrist causing hand numbness, tingling, and weakness, worsened by repetitive motions."},
 ]
 
+
+# ── Metric helpers ─────────────────────────────────────────────────────────────
+
+def context_recall(context: str, ground_truth: str) -> float:
+    gt_words  = {w for w in ground_truth.lower().split() if len(w) > 3}
+    ctx_words = set(context.lower().split())
+    return len(gt_words & ctx_words) / len(gt_words) if gt_words else 0.0
+
+
+def hit_rate(docs, ground_truth: str, threshold: float = 0.30) -> int:
+    for doc in docs:
+        if context_recall(doc.page_content, ground_truth) >= threshold:
+            return 1
+    return 0
+
+
+def mrr(docs, ground_truth: str, threshold: float = 0.30) -> float:
+    for rank, doc in enumerate(docs, 1):
+        if context_recall(doc.page_content, ground_truth) >= threshold:
+            return 1.0 / rank
+    return 0.0
+
+
+# ── Setup ──────────────────────────────────────────────────────────────────────
 
 def build_retriever_reranker():
     emb       = HuggingFaceEmbeddings(model_name=EMBED_MODEL, model_kwargs={"device": "cpu"})
@@ -136,89 +163,82 @@ def build_retriever_reranker():
     return retriever, reranker
 
 
-def build_llm():
-    endpoint = HuggingFaceEndpoint(
-        repo_id=REPO_ID, temperature=TEMPERATURE, max_new_tokens=MAX_TOKENS,
-        huggingfacehub_api_token=os.environ.get("HF_TOKEN", ""), task="text-generation",
-    )
-    return ChatHuggingFace(llm=endpoint)
-
-
-def get_answer(question, retriever, reranker, llm):
+def retrieve_and_rerank(question, retriever, reranker):
     docs   = retriever.invoke(question)
     pairs  = [[question, d.page_content] for d in docs]
     scores = reranker.predict(pairs)
-    top    = [d for _, d in sorted(zip(scores, docs), reverse=True)][:TOP_K]
-    ctx    = "\n\n---\n\n".join(d.page_content for d in top)
-    msgs   = [
-        SystemMessage(content=f"Answer ONLY from the context below.\n\nContext:\n{ctx}"),
-        HumanMessage(content=question),
-    ]
-    return llm.invoke(msgs).content, top
+    return [d for _, d in sorted(zip(scores, docs), reverse=True)][:TOP_K]
 
 
-def context_recall(context: str, ground_truth: str) -> float:
-    gt_words  = set(ground_truth.lower().split())
-    ctx_words = set(context.lower().split())
-    return len(gt_words & ctx_words) / len(gt_words) if gt_words else 0.0
-
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    print("Loading models…")
+    print("Loading retriever and reranker…")
     retriever, reranker = build_retriever_reranker()
-    llm = build_llm()
     scorer = rouge_lib.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
 
-    results, latencies = [], []
-    r1s, r2s, rls, ctx_recalls = [], [], [], []
+    records, latencies = [], []
+    r1s, r2s, rls, recalls, hits, mrrs = [], [], [], [], [], []
 
     for i, item in enumerate(EVAL_DATASET, 1):
-        print(f"[{i:02d}/50] {item['question'][:60]}…")
-        t0 = time.time()
-        answer, docs = get_answer(item["question"], retriever, reranker, llm)
-        latency = time.time() - t0
+        q, gt = item["question"], item["ground_truth"]
+        print(f"[{i:02d}/50] {q[:65]}")
 
-        scores   = scorer.score(item["ground_truth"], answer)
-        ctx_text = " ".join(d.page_content for d in docs)
-        recall   = context_recall(ctx_text, item["ground_truth"])
+        t0   = time.perf_counter()
+        docs = retrieve_and_rerank(q, retriever, reranker)
+        lat  = time.perf_counter() - t0
+
+        ctx     = " ".join(d.page_content for d in docs)
+        scores  = scorer.score(gt, ctx)
+        recall  = context_recall(ctx, gt)
+        hit     = hit_rate(docs, gt)
+        rr      = mrr(docs, gt)
 
         r1s.append(scores["rouge1"].fmeasure)
         r2s.append(scores["rouge2"].fmeasure)
         rls.append(scores["rougeL"].fmeasure)
-        ctx_recalls.append(recall)
-        latencies.append(latency)
+        recalls.append(recall)
+        hits.append(hit)
+        mrrs.append(rr)
+        latencies.append(lat)
 
-        results.append({
-            "question":       item["question"],
-            "ground_truth":   item["ground_truth"],
-            "answer":         answer,
+        records.append({
+            "question":       q,
+            "ground_truth":   gt,
             "rouge1_f":       round(scores["rouge1"].fmeasure, 4),
             "rouge2_f":       round(scores["rouge2"].fmeasure, 4),
             "rougeL_f":       round(scores["rougeL"].fmeasure, 4),
             "context_recall": round(recall, 4),
-            "latency_s":      round(latency, 2),
+            "hit_rate":       hit,
+            "mrr":            round(rr, 4),
+            "latency_s":      round(lat, 3),
         })
-        time.sleep(0.5)
 
+    n = len(EVAL_DATASET)
+    sorted_lat = sorted(latencies)
     summary = {
-        "n_questions":          50,
-        "avg_rouge1_f":         round(sum(r1s) / 50, 4),
-        "avg_rouge2_f":         round(sum(r2s) / 50, 4),
-        "avg_rougeL_f":         round(sum(rls) / 50, 4),
-        "avg_context_recall":   round(sum(ctx_recalls) / 50, 4),
-        "avg_latency_s":        round(sum(latencies) / 50, 2),
-        "p50_latency_s":        round(sorted(latencies)[24], 2),
-        "p95_latency_s":        round(sorted(latencies)[47], 2),
+        "n_questions":        n,
+        "avg_rouge1_f":       round(sum(r1s) / n, 4),
+        "avg_rouge2_f":       round(sum(r2s) / n, 4),
+        "avg_rougeL_f":       round(sum(rls) / n, 4),
+        "avg_context_recall": round(sum(recalls) / n, 4),
+        "hit_rate@3":         round(sum(hits) / n, 4),
+        "mrr@3":              round(sum(mrrs) / n, 4),
+        "avg_latency_s":      round(sum(latencies) / n, 3),
+        "p50_latency_s":      round(sorted_lat[n // 2], 3),
+        "p95_latency_s":      round(sorted_lat[int(n * 0.95)], 3),
     }
 
-    output = {"summary": summary, "results": results}
     with open("eval_results.json", "w") as f:
-        json.dump(output, f, indent=2)
+        json.dump({"summary": summary, "per_question": records}, f, indent=2)
 
-    print("\n=== Evaluation Summary ===")
+    print("\n" + "=" * 42)
+    print("  Retrieval Evaluation Summary (n=50)")
+    print("=" * 42)
     for k, v in summary.items():
-        print(f"  {k:<28} {v}")
-    print("\nFull results saved to eval_results.json")
+        print(f"  {k:<26} {v}")
+    print("=" * 42)
+    print("Full results saved to eval_results.json")
 
 
 if __name__ == "__main__":

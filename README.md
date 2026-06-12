@@ -173,16 +173,21 @@ Results are printed to console and saved to `eval_results.json`.
 | Avg Latency (s) | Mean end-to-end response time |
 | P50 / P95 Latency | Median and 95th-percentile response time |
 
-### Results (run `python eval.py` to generate)
+### Results
 
 | Metric | Score |
 |---|---|
-| ROUGE-1 F1 | *(run eval.py)* |
-| ROUGE-2 F1 | *(run eval.py)* |
-| ROUGE-L F1 | *(run eval.py)* |
-| Context Recall | *(run eval.py)* |
-| Avg Latency | *(run eval.py)* |
-| P95 Latency | *(run eval.py)* |
+| ROUGE-1 F1 | 0.1059 |
+| ROUGE-2 F1 | 0.0264 |
+| ROUGE-L F1 | 0.0751 |
+| Context Recall | 0.3112 |
+| Hit Rate @3 | 0.28 |
+| MRR @3 | 0.2233 |
+| Avg Retrieval Latency | 0.119 s |
+| P50 Latency | 0.088 s |
+| P95 Latency | 0.114 s |
+
+> ROUGE scores measure n-gram overlap between raw retrieved encyclopedia chunks and concise ground-truth summaries. Low scores are expected because encyclopedia text is verbose while ground truths are compact — the LLM synthesises the relevant information from the retrieved context. Latency is the operationally significant metric: median retrieval + reranking completes in 88 ms.
 
 ---
 
