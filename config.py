@@ -1,0 +1,11 @@
+REPO_ID       = "Qwen/Qwen2.5-7B-Instruct"
+EMBED_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
+RERANK_MODEL  = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+DB_PATH       = "vectorstore/db_faiss"
+DATA_PATH     = "data/"
+CHUNK_SIZE    = 500
+CHUNK_OVERLAP = 50
+FETCH_K       = 8
+TOP_K         = 3
+TEMPERATURE   = 0.4
+MAX_TOKENS    = 512

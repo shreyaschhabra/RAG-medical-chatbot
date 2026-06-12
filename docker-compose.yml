@@ -1,0 +1,11 @@
+services:
+  medibot:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./vectorstore:/app/vectorstore
+      - ./data:/app/data
+    restart: unless-stopped
